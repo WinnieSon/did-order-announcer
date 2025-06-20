@@ -10,7 +10,7 @@ from config import (
     SERIAL_PORT, BAUD_RATE, HEALTH_CHECK_COMMANDS, VALID_RESPONSES,
     WARNING_INTERVAL, HEALTH_CHECK_INTERVAL
 )
-from ui_utils import show_warning_message
+from logging_client import show_warning_message, log_info, log_error, log_success, log_debug
 from server_client import send_to_server
 
 
@@ -67,7 +67,7 @@ def send_health_check_command(serial_conn):
     """
     for i, command in enumerate(HEALTH_CHECK_COMMANDS):
         try:
-            print(f"헬스체크 명령 {i+1}/{len(HEALTH_CHECK_COMMANDS)} 전송 중...")
+            log_debug(f"헬스체크 명령 {i+1}/{len(HEALTH_CHECK_COMMANDS)} 전송 중: {command}")
             
             # 버퍼 비우기
             serial_conn.reset_input_buffer()
@@ -81,20 +81,22 @@ def send_health_check_command(serial_conn):
             for attempt in range(3):
                 if serial_conn.in_waiting > 0:
                     response = serial_conn.read(serial_conn.in_waiting)
-                    print(f"헬스체크 응답 받음: {response}")
+                    log_debug(f"헬스체크 응답 받음 (시도 {attempt+1}): {response}")
                     
                     # 응답이 유효한지 확인
                     if any(valid_resp in response for valid_resp in VALID_RESPONSES):
-                        print(f"바코드 리더기 헬스체크 성공 (명령어 {i+1})")
+                        log_success(f"바코드 리더기 헬스체크 성공 (명령어 {i+1})")
                         return True
                     elif len(response) > 0:
-                        print(f"알 수 없는 응답: {response}")
+                        log_debug(f"알 수 없는 응답이지만 통신 확인됨: {response}")
                         return True  # 어떤 응답이라도 받았으면 통신은 됨
+                else:
+                    log_debug(f"헬스체크 응답 대기 중 (시도 {attempt+1}/3)")
                 
                 time.sleep(0.1)
                 
         except Exception as e:
-            print(f"헬스체크 명령어 {i+1} 전송 오류: {e}")
+            log_error("헬스체크", f"명령어 {i+1} 전송 오류: {e}")
             continue
     
     return False
@@ -124,7 +126,7 @@ def check_barcode_reader_activity():
         
         if health_check_success:
             barcode_reader_active = True
-            print("바코드 리더기 헬스체크 성공 - 통신 정상")
+            log_success("바코드 리더기 헬스체크 성공 - 통신 정상")
         else:
             barcode_reader_active = False
             
@@ -157,9 +159,11 @@ def read_barcode(serial_conn):
             # 시리얼 포트에서 한 줄 읽기
             line = serial_conn.readline().decode('utf-8').strip()
             if line:
+                log_debug(f"시리얼 포트에서 데이터 수신: '{line}' (길이: {len(line)})")
+                
                 # 헬스체크 응답인지 확인 (바코드 데이터와 구분)
                 if any(valid_resp.decode('utf-8', errors='ignore') in line for valid_resp in VALID_RESPONSES):
-                    print(f"헬스체크 응답 수신: {line}")
+                    log_debug(f"헬스체크 응답으로 분류된 데이터: {line}")
                     continue
                 
                 # 바코드 데이터를 받았으므로 시간 업데이트
@@ -171,13 +175,32 @@ def read_barcode(serial_conn):
                 barcodes = line.replace('\n', ' ').split()
                 for barcode in barcodes:
                     if barcode != last_sent_barcode:
-                        print(f"받은 바코드: {barcode}")
+                        log_info(f"받은 바코드: {barcode}")
+                        log_debug(f"바코드 데이터 길이: {len(barcode)}, 내용: '{barcode}'")
+                        
+                        # 바코드 수신 이벤트 로깅
+                        try:
+                            from logging_client import get_logger
+                            logger = get_logger()
+                            logger.log_barcode_received(barcode, is_duplicate=False)
+                        except Exception:
+                            pass  # 로깅 실패는 무시
+                        
                         send_to_server(barcode)
                         last_sent_barcode = barcode
                     else:
-                        print(f"중복된 바코드 {barcode}는 전송하지 않습니다.")
+                        log_info(f"중복된 바코드 {barcode}는 전송하지 않습니다.")
+                        log_debug(f"중복 바코드 상세: 이전='{last_sent_barcode}', 현재='{barcode}'")
+                        
+                        # 중복 바코드 이벤트 로깅
+                        try:
+                            from logging_client import get_logger
+                            logger = get_logger()
+                            logger.log_barcode_received(barcode, is_duplicate=True)
+                        except Exception:
+                            pass  # 로깅 실패는 무시
         except Exception as e:
-            print(f"시리얼 포트 읽기 오류: {e}")
+            log_error("시리얼 포트", f"읽기 오류: {e}")
             time.sleep(1)  # 오류 발생 시 잠시 대기
 
 
@@ -192,11 +215,11 @@ def open_serial_connection():
     
     try:
         serial_connection = serial.Serial(SERIAL_PORT, BAUD_RATE, timeout=1)
-        print(f"시리얼 포트 {SERIAL_PORT}을(를) {BAUD_RATE} 보드레이트로 열었습니다.")
+        log_success(f"시리얼 포트 {SERIAL_PORT}을(를) {BAUD_RATE} 보드레이트로 열었습니다.")
         return serial_connection
     except serial.SerialException as e:
         serial_connection = None
-        print(f"시리얼 포트 {SERIAL_PORT}을(를) 열 수 없습니다: {e}")
+        log_error("시리얼 포트", f"{SERIAL_PORT}을(를) 열 수 없습니다: {e}")
         return None
 
 

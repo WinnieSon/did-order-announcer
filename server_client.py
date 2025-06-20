@@ -5,8 +5,8 @@
 import requests
 from datetime import datetime, timedelta
 
-from config import API_URL, SERVER_HOST, WARNING_INTERVAL
-from ui_utils import show_warning_message
+from config import API_URL, SERVER_HOST, WARNING_INTERVAL, ENABLE_ERROR_LOG_UPLOAD
+from logging_client import show_warning_message, log_success, log_error
 
 
 # 상태 변수들
@@ -54,11 +54,43 @@ def send_to_server(barcode):
     try:
         response = requests.post(API_URL, json=payload, timeout=10)
         if response.status_code == 200:
-            print(f"바코드 {barcode} 서버 전송 성공.")
+            log_success(f"바코드 {barcode} 서버 전송 성공")
+            
+            # 성공 로그를 시스템 로거에도 기록
+            if ENABLE_ERROR_LOG_UPLOAD:
+                try:
+                    from logging_client import get_logger
+                    logger = get_logger()
+                    logger.log_barcode_send_result(barcode, True)
+                    logger.log_barcode_event(barcode, 'success')
+                except Exception:
+                    pass  # 로깅 실패는 무시
         else:
-            print(f"바코드 {barcode} 전송 실패. 상태 코드: {response.status_code}, 응답: {response.text}")
+            error_msg = f"바코드 {barcode} 전송 실패. 상태 코드: {response.status_code}, 응답: {response.text}"
+            log_error("바코드 전송", error_msg)
+            
+            # 실패 로그를 시스템 로거에도 기록
+            if ENABLE_ERROR_LOG_UPLOAD:
+                try:
+                    from logging_client import get_logger
+                    logger = get_logger()
+                    logger.log_barcode_send_result(barcode, False, f"HTTP {response.status_code}: {response.text}")
+                    logger.log_barcode_event(barcode, 'failed')
+                except Exception:
+                    pass  # 로깅 실패는 무시
     except Exception as e:
-        print(f"서버 전송 오류: {e}")
+        error_msg = f"서버 전송 오류: {e}"
+        log_error("바코드 전송", error_msg)
+        
+        # 예외 로그를 시스템 로거에도 기록
+        if ENABLE_ERROR_LOG_UPLOAD:
+            try:
+                from logging_client import get_logger
+                logger = get_logger()
+                logger.log_barcode_send_result(barcode, False, str(e))
+                logger.log_custom_error("BARCODE_SEND_ERROR", f"{barcode}: {str(e)}")
+            except Exception:
+                pass  # 로깅 실패는 무시
 
 
 def get_server_status():
