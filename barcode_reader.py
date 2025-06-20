@@ -7,8 +7,8 @@ import time
 from datetime import datetime, timedelta
 
 from config import (
-    SERIAL_PORT, BAUD_RATE, HEALTH_CHECK_COMMANDS, VALID_RESPONSES,
-    WARNING_INTERVAL, HEALTH_CHECK_INTERVAL
+    SERIAL_PORT, BAUD_RATE, WARNING_INTERVAL, 
+    HEALTH_CHECK_INTERVAL, BARCODE_ACTIVITY_TIMEOUT
 )
 from logging_client import show_warning_message, log_info, log_error, log_success, log_debug
 from server_client import send_to_server
@@ -19,7 +19,6 @@ serial_port_available = False
 barcode_reader_active = False
 serial_connection = None
 last_barcode_time = None
-last_health_check_time = None
 last_sent_barcode = None
 last_serial_warning = None
 last_barcode_warning = None
@@ -55,93 +54,63 @@ def check_serial_port():
         return False
 
 
-def send_health_check_command(serial_conn):
+def check_barcode_reader_connection():
     """
-    바코드 리더기에 헬스체크 명령어를 전송하고 응답을 확인합니다.
+    바코드 리더 연결 상태를 간단히 확인합니다.
+    시리얼 포트 연결 여부로만 판단합니다.
     
-    Args:
-        serial_conn: 시리얼 연결 객체
-        
     Returns:
-        bool: 헬스체크 성공 여부
+        bool: 연결 상태
     """
-    for i, command in enumerate(HEALTH_CHECK_COMMANDS):
-        try:
-            log_debug(f"헬스체크 명령 {i+1}/{len(HEALTH_CHECK_COMMANDS)} 전송 중: {command}")
-            
-            # 버퍼 비우기
-            serial_conn.reset_input_buffer()
-            serial_conn.reset_output_buffer()
-            
-            # 명령어 전송
-            serial_conn.write(command)
-            time.sleep(0.1)  # 리더기 응답 대기
-            
-            # 응답 확인 (여러 번 시도)
-            for attempt in range(3):
-                if serial_conn.in_waiting > 0:
-                    response = serial_conn.read(serial_conn.in_waiting)
-                    log_debug(f"헬스체크 응답 받음 (시도 {attempt+1}): {response}")
-                    
-                    # 응답이 유효한지 확인
-                    if any(valid_resp in response for valid_resp in VALID_RESPONSES):
-                        log_success(f"바코드 리더기 헬스체크 성공 (명령어 {i+1})")
-                        return True
-                    elif len(response) > 0:
-                        log_debug(f"알 수 없는 응답이지만 통신 확인됨: {response}")
-                        return True  # 어떤 응답이라도 받았으면 통신은 됨
-                else:
-                    log_debug(f"헬스체크 응답 대기 중 (시도 {attempt+1}/3)")
-                
-                time.sleep(0.1)
-                
-        except Exception as e:
-            log_error("헬스체크", f"명령어 {i+1} 전송 오류: {e}")
-            continue
-    
-    return False
+    try:
+        if serial_connection and serial_connection.is_open:
+            log_debug("바코드 리더 시리얼 포트 연결 확인됨")
+            return True
+        else:
+            log_debug("바코드 리더 시리얼 포트 연결 끊어짐")
+            return False
+    except Exception as e:
+        log_error("연결 체크", f"바코드 리더 연결 확인 오류: {e}")
+        return False
 
 
 def check_barcode_reader_activity():
     """
-    바코드 리더 활동 상태를 확인합니다.
+    바코드 리더 활동 상태를 확인합니다. (Linux 환경 최적화)
+    시리얼 포트 연결 + 최근 바코드 수신 여부로 판단합니다.
     """
-    global barcode_reader_active, last_barcode_warning, last_barcode_time, last_health_check_time
+    global barcode_reader_active, last_barcode_warning, last_barcode_time
     
     current_time = datetime.now()
     
-    # 바코드 데이터를 최근에 받았으면 활성 상태로 간주
-    if last_barcode_time and current_time - last_barcode_time < timedelta(minutes=5):
-        barcode_reader_active = True
-        return
+    # 1. 시리얼 포트 연결 상태 확인
+    connection_ok = check_barcode_reader_connection()
     
-    # 바코드 데이터를 받지 못했으면 헬스체크로 통신 상태 확인
-    if (serial_port_available and serial_connection and 
-        (last_health_check_time is None or 
-         current_time - last_health_check_time >= timedelta(seconds=HEALTH_CHECK_INTERVAL))):
-        
-        print("바코드 리더기 헬스체크 실행 중...")
-        health_check_success = send_health_check_command(serial_connection)
-        last_health_check_time = current_time
-        
-        if health_check_success:
+    if connection_ok:
+        # 2. 최근 바코드 활동 확인
+        if last_barcode_time and current_time - last_barcode_time < timedelta(seconds=BARCODE_ACTIVITY_TIMEOUT):
             barcode_reader_active = True
-            log_success("바코드 리더기 헬스체크 성공 - 통신 정상")
+            log_debug(f"바코드 리더 활성: 최근 바코드 수신 ({(current_time - last_barcode_time).seconds}초 전)")
         else:
-            barcode_reader_active = False
-            
-            # 5분마다 또는 처음 실행시에만 경고 메시지 표시
-            if (last_barcode_warning is None or 
-                current_time - last_barcode_warning >= timedelta(seconds=WARNING_INTERVAL)):
-                show_warning_message(
-                    "바코드 리더 통신 오류",
-                    "바코드 리더기와의 통신이 원활하지 않습니다.\n헬스체크 명령에 응답하지 않습니다.\n리더기 상태를 확인해주세요."
-                )
-                last_barcode_warning = current_time
-    
-    # 시리얼 포트가 열려있지 않으면 비활성 상태
-    elif not serial_port_available or not serial_connection:
+            # 연결은 되어 있지만 바코드 수신이 없는 상태
+            barcode_reader_active = True  # 연결만으로도 일단 활성으로 간주
+            if last_barcode_time:
+                inactive_duration = (current_time - last_barcode_time).seconds
+                log_debug(f"바코드 리더 연결됨: 마지막 바코드 수신 {inactive_duration}초 전")
+            else:
+                log_debug("바코드 리더 연결됨: 바코드 수신 기록 없음")
+    else:
+        # 시리얼 포트 연결 실패
         barcode_reader_active = False
+        
+        # 5분마다 또는 처음 실행시에만 경고 메시지 표시
+        if (last_barcode_warning is None or 
+            current_time - last_barcode_warning >= timedelta(seconds=WARNING_INTERVAL)):
+            show_warning_message(
+                "바코드 리더 연결 오류",
+                "바코드 리더기와의 시리얼 포트 연결이 끊어졌습니다.\n리더기 연결 상태를 확인해주세요."
+            )
+            last_barcode_warning = current_time
 
 
 def read_barcode(serial_conn):
@@ -160,11 +129,6 @@ def read_barcode(serial_conn):
             line = serial_conn.readline().decode('utf-8').strip()
             if line:
                 log_debug(f"시리얼 포트에서 데이터 수신: '{line}' (길이: {len(line)})")
-                
-                # 헬스체크 응답인지 확인 (바코드 데이터와 구분)
-                if any(valid_resp.decode('utf-8', errors='ignore') in line for valid_resp in VALID_RESPONSES):
-                    log_debug(f"헬스체크 응답으로 분류된 데이터: {line}")
-                    continue
                 
                 # 바코드 데이터를 받았으므로 시간 업데이트
                 last_barcode_time = datetime.now()
@@ -258,7 +222,6 @@ def initialize_barcode_reader_times():
     """
     바코드 리더 관련 시간 변수들을 초기화합니다.
     """
-    global last_barcode_time, last_health_check_time
+    global last_barcode_time
     current_time = datetime.now()
-    last_barcode_time = current_time
-    last_health_check_time = current_time 
+    last_barcode_time = current_time 

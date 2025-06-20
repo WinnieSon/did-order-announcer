@@ -30,23 +30,7 @@ SYSLOG_ADDRESS = (BSD_SERVER, BSD_PORT) if BSD_SERVER and BSD_PORT else None  # 
 ENABLE_ERROR_LOG_UPLOAD = os.getenv('ENABLE_ERROR_LOG_UPLOAD', 'True').lower() == 'true'  # 에러 로그 서버 전송 활성화
 LOG_DIRECTORY = os.getenv('LOG_DIRECTORY', 'logs')  # 로컬 로그 파일 저장 디렉토리
 
-# 바코드 리더기 헬스체크 명령어들 (표준 프로토콜)
-HEALTH_CHECK_COMMANDS = [
-    b'\x05',                    # ENQ (Enquiry) - 기본 통신 확인
-    b'\x02STATUS\x03',          # STATUS 명령어 (STX + STATUS + ETX)
-    b'\x02VER\x03',             # VERSION 조회
-    b'\x02BEEP\x03',            # BEEP 명령어 - 물리적 응답 확인
-    b'STATUS\r\n',              # 일부 리더기용 STATUS 명령
-    b'?\r\n',                   # 간단한 응답 확인
-]
-
-# 예상되는 응답 패턴들
-VALID_RESPONSES = [
-    b'\x06',                    # ACK (Acknowledge)
-    b'\x15',                    # NAK (Negative Acknowledge)
-    b'OK',                      # OK 응답
-    b'STATUS',                  # STATUS 응답
-    b'VER',                     # VERSION 응답
-    b'BEEP',                    # BEEP 응답
-    b'READY',                   # READY 응답
-] 
+# 바코드 리더 활성 상태 판단 기준 (Linux 환경 최적화)
+# - 시리얼 포트 연결 가능: 리더기 물리적 연결 확인
+# - 최근 바코드 수신: 실제 동작 확인
+BARCODE_ACTIVITY_TIMEOUT = 300  # 5분 (300초) - 바코드 수신이 없으면 비활성으로 간주 

@@ -5,11 +5,11 @@
 import serial
 import time
 
-from config import SERIAL_PORT, BAUD_RATE, SERVER_HOST, CHECK_INTERVAL, HEALTH_CHECK_COMMANDS
+from config import SERIAL_PORT, BAUD_RATE, SERVER_HOST, CHECK_INTERVAL
 from server_client import check_server_connection
 from barcode_reader import (
     check_serial_port, read_barcode, open_serial_connection, 
-    send_health_check_command, set_serial_connection,
+    check_barcode_reader_connection, set_serial_connection,
     initialize_barcode_reader_times, get_barcode_reader_status
 )
 from monitor import start_status_monitor
@@ -24,7 +24,7 @@ def main():
     log_info(f"시리얼 포트: {SERIAL_PORT}")
     log_info(f"서버 주소: {SERVER_HOST}")
     log_info(f"상태 체크 주기: {CHECK_INTERVAL}초 (5분)")
-    log_info(f"헬스체크 명령어: {len(HEALTH_CHECK_COMMANDS)}개 명령어 지원")
+    log_info("바코드 리더 상태 체크: 시리얼 포트 연결 + 바코드 수신 기반")
     
     # 초기 시간 설정
     initialize_barcode_reader_times()
@@ -51,13 +51,13 @@ def main():
                 set_serial_connection(ser)
                 log_success(f"시리얼 포트 {SERIAL_PORT}을(를) {BAUD_RATE} 보드레이트로 열었습니다.")
                 
-                # 초기 헬스체크 수행
-                log_info("초기 바코드 리더기 헬스체크 수행 중...")
-                initial_health = send_health_check_command(ser)
-                if initial_health:
-                    log_success("초기 헬스체크 성공 - 바코드 리더기 통신 정상")
+                # 초기 연결 상태 확인
+                log_info("바코드 리더기 연결 상태 확인 중...")
+                connection_ok = check_barcode_reader_connection()
+                if connection_ok:
+                    log_success("바코드 리더기 연결 정상 - 바코드 수신 대기")
                 else:
-                    log_error("헬스체크", "초기 헬스체크 실패 - 바코드 리더기 응답 없음")
+                    log_error("연결 확인", "바코드 리더기 연결 상태 확인 실패")
                 
                 read_barcode(ser)
                 
